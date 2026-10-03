@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Raylib Style Image Cropper</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- JSZip Library for Exporting ZIP -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #d1d1d1;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            user-select: none;
+        }
+        canvas {
+            image-rendering: pixelated;
+            background-image: 
+                linear-gradient(45deg, #222 25%, transparent 25%), 
+                linear-gradient(-45deg, #222 25%, transparent 25%), 
+                linear-gradient(45deg, transparent 75%, #222 75%), 
+                linear-gradient(-45deg, transparent 75%, #222 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+        }
+        .raylib-panel {
+            background-color: #2a2a2a;
+            border: 2px solid #4a4a4a;
+        }
+        .raylib-button {
+            background-color: #4a4a4a;
+            transition: all 0.2s;
+        }
+        .raylib-button:hover {
+            background-color: #6a6a6a;
+            color: #fff;
+        }
+        .raylib-input {
+            background-color: #1a1a1a;
+            border: 1px solid #4a4a4a;
+            color: #00ff00;
+        }
+        .panning { cursor: grab !important; }
+        .panning:active { cursor: grabbing !important; }
+        .moving { cursor: move !important; }
+        
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1a1a1a; }
+        ::-webkit-scrollbar-thumb { background: #4a4a4a; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6a6a6a; }
+    </style>
+</head>
+<body class="h-screen flex flex-col p-4 relative">
+
+    <div id="toast" class="hidden absolute top-4 left-1/2 transform -translate-x-1/2 bg-yellow-500 text-black font-bold font-mono px-4 py-2 rounded shadow-2xl z-50 text-xs border border-yellow-300 pointer-events-none">
+        Notification
+    </div>
+
+    <!-- Header -->
+    <div class="flex-none flex justify-between items-center mb-3">
+        <h1 class="text-2xl font-bold text-white font-mono tracking-tighter flex items-center gap-2">
+            IMAGE CROPPER <span class="text-xs font-normal text-yellow-500 italic bg-black bg-opacity-40 px-2 py-0.5 rounded border border-gray-700">v2.5 [Full Stable]</span>
+        </h1>
+        <div class="text-[10px] text-gray-400 space-x-4 font-mono bg-black bg-opacity-40 p-1.5 px-4 rounded-full border border-gray-800 hidden md:flex">
+            <span>[Double Click] メモ編集</span>
+            <span>[Space + Drag / 右ドラッグ] 移動</span>
+            <span>[Wheel] 拡大縮小</span>
+            <span>[Shift] スナップ</span>
+        </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <div class="flex-1 flex gap-4 overflow-hidden">
+        
+        <div id="canvasContainer" class="flex-1 raylib-panel rounded relative overflow-hidden flex items-center justify-center bg-black shadow-2xl">
+            <canvas id="mainCanvas"></canvas>
+            
+            <!-- Drop Zone Overlay -->
+            <div id="dropZone" class="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-75 border-4 border-dashed border-yellow-500/50 m-4 pointer-events-none transition-all">
+                <div class="bg-gray-900 border border-gray-700 p-6 rounded-lg text-center shadow-2xl">
+                    <p class="text-2xl font-bold text-yellow-400 font-mono mb-2">DRAG & DROP IMAGE HERE</p>
+                    <p class="text-xs text-gray-400 font-mono">または右パネルの「LOAD IMAGE SOURCE」から画像を選択</p>
+                </div>
+            </div>
+            
+            <div class="absolute bottom-3 left-3 bg-black bg-opacity-70 p-2 rounded text-[10px] pointer-events-none font-mono border border-gray-700 text-gray-300">
+                ZOOM: <span id="zoomDisplay" class="text-yellow-400 font-bold">100%</span> | PAN: <span id="panDisplay" class="text-yellow-400 font-bold">0, 0</span>
+            </div>
+        </div>
+
+        <div class="w-80 flex flex-col gap-3 overflow-y-auto pr-1">
+            
+            <!-- Panel 01: File Input & JSON Import -->
+            <div class="raylib-panel p-3 rounded shadow-lg">
+                <h2 class="text-xs font-bold text-yellow-500 mb-2 font-mono uppercase tracking-widest border-b border-gray-700 pb-1">01. Image & Data File</h2>
+                <input type="file" id="fileInput" accept="image/*" class="hidden">
+                <input type="file" id="jsonFileInput" accept=".json,application/json" class="hidden">
+                <button id="loadImageBtn" class="w-full raylib-button py-2 rounded text-xs font-bold mb-2 text-white">LOAD IMAGE SOURCE</button>
+                <button id="importJsonBtn" class="w-full bg-cyan-900 hover:bg-cyan-700 border border-cyan-600 text-white py-1.5 rounded text-xs font-bold mb-2 transition-colors">IMPORT JSON DATA</button>
+                <p id="imageInfo" class="text-[10px] text-gray-400 font-mono truncate">Waiting for input...</p>
+            </div>
+
+            <!-- Panel 02: Active Region Settings & Memo -->
+            <div class="raylib-panel p-3 rounded shadow-lg">
+                <h2 class="text-xs font-bold text-yellow-500 mb-2 font-mono uppercase tracking-widest border-b border-gray-700 pb-1">02. Active Selection</h2>
+                <div class="grid grid-cols-2 gap-2 mb-2">
+                    <div><label class="text-[9px] text-gray-500 block mb-0.5">POS X</label><input type="number" id="inputX" class="w-full raylib-input p-1 text-xs rounded" value="0"></div>
+                    <div><label class="text-[9px] text-gray-500 block mb-0.5">POS Y</label><input type="number" id="inputY" class="w-full raylib-input p-1 text-xs rounded" value="0"></div>
+                    <div><label class="text-[9px] text-gray-500 block mb-0.5">WIDTH</label><input type="number" id="inputW" class="w-full raylib-input p-1 text-xs rounded" value="0"></div>
+                    <div><label class="text-[9px] text-gray-500 block mb-0.5">HEIGHT</label><input type="number" id="inputH" class="w-full raylib-input p-1 text-xs rounded" value="0"></div>
+                </div>
+                <div class="mb-2">
+                    <label class="text-[9px] text-gray-400 font-mono block mb-0.5">MEMO / LABEL (メモ・名前)</label>
+                    <input type="text" id="inputMemo" class="w-full raylib-input p-1 text-xs rounded font-mono" placeholder="例: Hero_Idle_0">
+                </div>
+                <button id="addRegionBtn" class="w-full bg-green-900 hover:bg-green-700 py-2 rounded text-xs font-bold border border-green-600 text-white transition-colors">ADD REGION TO LIST</button>
+            </div>
+
+            <!-- Panel 03: Grid Auto Split -->
+            <div class="raylib-panel p-3 rounded shadow-lg">
+                <h2 class="text-xs font-bold text-yellow-500 mb-2 font-mono uppercase tracking-widest border-b border-gray-700 pb-1">03. Auto Grid Split</h2>
+                <div class="grid grid-cols-2 gap-2 mb-2">
+                    <div>
+                        <label class="text-[9px] text-gray-400 font-mono block mb-0.5">COLS (横分割)</label>
+                        <input type="number" id="gridCols" class="w-full raylib-input p-1 text-xs rounded font-mono" value="4" min="1">
+                    </div>
+                    <div>
+                        <label class="text-[9px] text-gray-400 font-mono block mb-0.5">ROWS (縦分割)</label>
+                        <input type="number" id="gridRows" class="w-full raylib-input p-1 text-xs rounded font-mono" value="4" min="1">
+                    </div>
+                </div>
+                <div class="mb-2">
+                    <label class="text-[9px] text-gray-400 font-mono block mb-0.5">TARGET (対象範囲)</label>
+                    <select id="gridTarget" class="w-full raylib-input p-1 text-xs rounded font-mono cursor-pointer">
+                        <option value="image">Full Image (画像全体)</option>
+                        <option value="selection">Active Selection (選択範囲)</option>
+                    </select>
+                </div>
+                <button id="generateGridBtn" class="w-full bg-purple-900 hover:bg-purple-700 py-1.5 rounded text-xs font-bold border border-purple-600 text-white transition-colors">GENERATE GRID TILES</button>
+            </div>
+
+            <!-- Panel 04: Region List & Export Tools -->
+            <div class="raylib-panel p-3 rounded flex-1 min-h-[220px] flex flex-col shadow-lg">
+                <div class="flex justify-between items-center mb-2 border-b border-gray-700 pb-1">
+                    <h2 class="text-xs font-bold text-yellow-500 font-mono uppercase tracking-widest">04. Region List</h2>
+                    <button id="clearListBtn" class="text-[9px] text-red-400 hover:text-red-200 font-bold uppercase transition-colors">Clear All</button>
+                </div>
+                
+                <div id="regionsList" class="flex-1 overflow-y-auto space-y-1.5 mb-3 text-[11px] font-mono pr-1">
+                    <!-- Dynamic Region Cards will be inserted here -->
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 mb-2">
+                    <button id="copyBtn" class="bg-blue-900 hover:bg-blue-700 text-white py-1.5 rounded text-[10px] font-bold transition-all border border-blue-600">COPY JSON</button>
+                    <button id="downloadJsonBtn" class="bg-cyan-900 hover:bg-cyan-700 text-white py-1.5 rounded text-[10px] font-bold transition-all border border-cyan-600">SAVE JSON</button>
+                </div>
+                <button id="exportZipBtn" class="w-full bg-amber-800 hover:bg-amber-600 text-white py-2 rounded text-xs font-bold transition-all border border-amber-500 shadow">EXPORT ALL TILES (.ZIP)</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('mainCanvas');
+        const ctx = canvas.getContext('2d');
+        const canvasContainer = document.getElementById('canvasContainer');
+        
+        const fileInput = document.getElementById('fileInput');
+        const jsonFileInput = document.getElementById('jsonFileInput');
+        const loadImageBtn = document.getElementById('loadImageBtn');
+        const importJsonBtn = document.getElementById('importJsonBtn');
+        const dropZone = document.getElementById('dropZone');
+        const imageInfo = document.getElementById('imageInfo');
+
+        const inputX = document.getElementById('inputX');
+        const inputY = document.getElementById('inputY');
+        const inputW = document.getElementById('inputW');
+        const inputH = document.getElementById('inputH');
+        const inputMemo = document.getElementById('inputMemo');
+        const addRegionBtn = document.getElementById('addRegionBtn');
+        
+        const gridColsInput = document.getElementById('gridCols');
+        const gridRowsInput = document.getElementById('gridRows');
+        const gridTargetSelect = document.getElementById('gridTarget');
+        const generateGridBtn = document.getElementById('generateGridBtn');
+
+        const regionsList = document.getElementById('regionsList');
+        const clearListBtn = document.getElementById('clearListBtn');
+        const copyBtn = document.getElementById('copyBtn');
+        const downloadJsonBtn = document.getElementById('downloadJsonBtn');
+        const exportZipBtn = document.getElementById('exportZipBtn');
+
+        const zoomDisplay = document.getElementById('zoomDisplay');
+        const panDisplay = document.getElementById('panDisplay');
+        const toast = document.getElementById('toast');
+
+        let img = new Image();
+        let isImageLoaded = false;
+        let regions = [];
+        
+        let isDrawing = false;
+        let isPanning = false;
+        let isMoving = false;
+        let spacePressed = false;
+        
+        let startX = 0, startY = 0; 
+        let moveOffsetX = 0, moveOffsetY = 0;
+        let panX = 0, panY = 0; 
+        let lastPanX = 0, lastPanY = 0; 
+        let zoom = 1.0;
+        
+        let currentRect = { id: null, x: 0, y: 0, w: 0, h: 0, memo: '' };
+        const SNAP_THRESHOLD = 5;
+
+        function showNotification(text) {
+            if (!toast) return;
+            toast.innerText = text;
+            toast.classList.remove('hidden');
+            setTimeout(() => { toast.classList.add('hidden'); }, 2200);
+        }
+
+        function resizeCanvas() {
+            if (!canvasContainer) return;
+            canvas.width = canvasContainer.clientWidth;
+            canvas.height = canvasContainer.clientHeight;
+            draw();
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        function screenToImage(clientX, clientY) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: (clientX - rect.left - panX) / zoom,
+                y: (clientY - rect.top - panY) / zoom
+            };
+        }
+
+        function applySnap(rect, excludeId = null) {
+            let snappedX = rect.x;
+            let snappedY = rect.y;
+
+            const targets = regions.filter(r => r.id !== excludeId);
+            
+            for (const r of targets) {
+                if (Math.abs(rect.x - (r.x + r.w)) < SNAP_THRESHOLD) snappedX = r.x + r.w;
+                else if (Math.abs((rect.x + rect.w) - r.x) < SNAP_THRESHOLD) snappedX = r.x - rect.w;
+                else if (Math.abs(rect.x - r.x) < SNAP_THRESHOLD) snappedX = r.x;
+
+                if (Math.abs(rect.y - (r.y + r.h)) < SNAP_THRESHOLD) snappedY = r.y + r.h;
+                else if (Math.abs((rect.y + rect.h) - r.y) < SNAP_THRESHOLD) snappedY = r.y - rect.h;
+                else if (Math.abs(rect.y - r.y) < SNAP_THRESHOLD) snappedY = r.y;
+            }
+
+            return { x: snappedX, y: snappedY };
+        }
+
+        loadImageBtn.addEventListener('click', () => fileInput.click());
+        importJsonBtn.addEventListener('click', () => jsonFileInput.click());
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) loadFile(file);
+            fileInput.value = '';
+        });
+
+        // Global Drag & Drop Handlers
+        window.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('hidden');
+        });
+
+        window.addEventListener('dragleave', (e) => {
+            if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+                if (isImageLoaded) dropZone.classList.add('hidden');
+            }
+        });
+
+        window.addEventListener('drop', (e) => {
+            e.preventDefault();
+            if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                const file = e.dataTransfer.files[0];
+                if (file.type.startsWith('image/')) {
+                    loadFile(file);
+                } else {
+                    showNotification('画像のファイル形式を選択してください');
+                }
+            }
+        });
+
+        function loadFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const tempImg = new Image();
+                tempImg.onload = () => {
+                    img = tempImg;
+                    isImageLoaded = true;
+
+                    // Calculate initial zoom & pan to fit container nicely
+                    const cW = canvasContainer.clientWidth || 800;
+                    const cH = canvasContainer.clientHeight || 600;
+                    const scaleX = (cW - 60) / img.width;
+                    const scaleY = (cH - 60) / img.height;
+                    zoom = Math.min(1.0, scaleX, scaleY);
+                    if (zoom <= 0.05) zoom = 0.05;
+
+                    panX = (cW - img.width * zoom) / 2;
+                    panY = (cH - img.height * zoom) / 2;
+
+                    dropZone.classList.add('hidden');
+                    imageInfo.innerText = `${file.name} (${img.width}x${img.height}px)`;
+                    
+                    // Default selection to center 64x64 or full image if smaller
+                    currentRect = {
+                        id: null,
+                        x: Math.floor(img.width / 2 - 32),
+                        y: Math.floor(img.height / 2 - 32),
+                        w: Math.min(64, img.width),
+                        h: Math.min(64, img.height),
+                        memo: ''
+                    };
+                    updateUIFromRect();
+
+                    resizeCanvas();
+                    showNotification('画像を読み込みました');
+                };
+                tempImg.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        jsonFileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const parsed = JSON.parse(event.target.result);
+                    if (Array.isArray(parsed)) {
+                        regions = parsed.map((item, index) => ({
+                            id: Date.now() + index,
+                            x: Math.round(item.x || 0),
+                            y: Math.round(item.y || 0),
+                            w: Math.round(item.w || item.width || 32),
+                            h: Math.round(item.h || item.height || 32),
+                            memo: item.memo || item.label || `Tile_${index}`
+                        }));
+                        updateRegionsList();
+                        draw();
+                        showNotification(`${regions.length} 件の領域データを読み込みました`);
+                    } else {
+                        showNotification('有効なJSON配列フォーマットではありません');
+                    }
+                } catch (err) {
+                    showNotification('JSONの解析に失敗しました');
+                }
+            };
+            reader.readAsText(file);
+            jsonFileInput.value = '';
+        });
+
+        function updateUIFromRect() {
+            inputX.value = Math.round(currentRect.x);
+            inputY.value = Math.round(currentRect.y);
+            inputW.value = Math.round(currentRect.w);
+            inputH.value = Math.round(currentRect.h);
+            inputMemo.value = currentRect.memo || '';
+        }
+
+        [inputX, inputY, inputW, inputH, inputMemo].forEach(input => {
+            input.addEventListener('input', () => {
+                currentRect.x = parseInt(inputX.value) || 0;
+                currentRect.y = parseInt(inputY.value) || 0;
+                currentRect.w = parseInt(inputW.value) || 0;
+                currentRect.h = parseInt(inputH.value) || 0;
+                currentRect.memo = inputMemo.value || '';
+                
+                if (currentRect.id !== null) {
+                    const targetIndex = regions.findIndex(r => r.id === currentRect.id);
+                    if (targetIndex !== -1) {
+                        regions[targetIndex] = { ...currentRect };
+                        updateRegionsList();
+                    }
+                }
+                draw();
+            });
+        });
+
+        addRegionBtn.addEventListener('click', () => {
+            if (currentRect.w <= 0 || currentRect.h <= 0) {
+                showNotification('幅と高さは1px以上である必要があります');
+                return;
+            }
+            const newRegion = {
+                id: Date.now(),
+                x: Math.round(currentRect.x),
+                y: Math.round(currentRect.y),
+                w: Math.round(currentRect.w),
+                h: Math.round(currentRect.h),
+                memo: currentRect.memo || `Tile_${regions.length}`
+            };
+            regions.push(newRegion);
+            currentRect.id = newRegion.id;
+            updateRegionsList();
+            draw();
+            showNotification('領域をリストに追加しました');
+        });
+
+        clearListBtn.addEventListener('click', () => {
+            if (regions.length === 0) return;
+            regions = [];
+            currentRect.id = null;
+            updateRegionsList();
+            draw();
+            showNotification('領域リストをリセットしました');
+        });
+
+        generateGridBtn.addEventListener('click', () => {
+            if (!isImageLoaded) {
+                showNotification('先に画像を読み込んでください');
+                return;
+            }
+
+            const cols = parseInt(gridColsInput.value) || 1;
+            const rows = parseInt(gridRowsInput.value) || 1;
+            const target = gridTargetSelect.value;
+
+            let baseX = 0, baseY = 0, baseW = img.width, baseH = img.height;
+
+            if (target === 'selection') {
+                baseX = currentRect.x;
+                baseY = currentRect.y;
+                baseW = currentRect.w;
+                baseH = currentRect.h;
+            }
+
+            if (baseW <= 0 || baseH <= 0) {
+                showNotification('対象の範囲が不適切です');
+                return;
+            }
+
+            const tileW = Math.floor(baseW / cols);
+            const tileH = Math.floor(baseH / rows);
+
+            if (tileW <= 0 || tileH <= 0) {
+                showNotification('分割後のサイズが小さすぎます');
+                return;
+            }
+
+            const baseMemo = currentRect.memo || 'Tile';
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    regions.push({
+                        id: Date.now() + (r * cols + c),
+                        x: baseX + c * tileW,
+                        y: baseY + r * tileH,
+                        w: tileW,
+                        h: tileH,
+                        memo: `${baseMemo}_${r}_${c}`
+                    });
+                }
+            }
+
+            updateRegionsList();
+            draw();
+            showNotification(`${cols * rows} 個のグリッドタイルを生成しました`);
+        });
+
+        function splitSpecificRegion(id) {
+            const index = regions.findIndex(r => r.id === id);
+            if (index === -1) return;
+
+            const targetRegion = regions[index];
+            const input = prompt(`「${targetRegion.memo}」の細分化パラメータを入力してください:\n[横分割数, 縦分割数] (例: 2,2)`, '2,2');
+            if (!input) return;
+
+            const parts = input.split(',').map(p => parseInt(p.trim()));
+            if (parts.length !== 2 || isNaN(parts[0]) || isNaN(parts[1]) || parts[0] <= 0 || parts[1] <= 0) {
+                showNotification('有効な分割数 (例: 2,2) を入力してください');
+                return;
+            }
+
+            const cols = parts[0];
+            const rows = parts[1];
+            const subW = Math.floor(targetRegion.w / cols);
+            const subH = Math.floor(targetRegion.h / rows);
+
+            if (subW <= 0 || subH <= 0) {
+                showNotification('分割後のサイズが小さすぎます');
+                return;
+            }
+
+            const newSubRegions = [];
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    newSubRegions.push({
+                        id: Date.now() + Math.random(),
+                        x: targetRegion.x + c * subW,
+                        y: targetRegion.y + r * subH,
+                        w: subW,
+                        h: subH,
+                        memo: `${targetRegion.memo}_sub_${r}_${c}`
+                    });
+                }
+            }
+
+            // Replace original region with new subdivided regions
+            regions.splice(index, 1, ...newSubRegions);
+            updateRegionsList();
+            draw();
+            showNotification(`領域を ${cols * rows} 分割に細分化しました`);
+        }
+
+        function updateRegionsList() {
+            regionsList.innerHTML = '';
+            
+            regions.forEach((r, idx) => {
+                const card = document.createElement('div');
+                const isSelected = (currentRect.id === r.id);
+                
+                card.className = `p-2 rounded border flex flex-col gap-1 transition-all ${
+                    isSelected 
+                    ? 'bg-yellow-950/60 border-yellow-500 text-yellow-200' 
+                    : 'bg-black/40 border-gray-700 text-gray-300 hover:border-gray-500'
+                }`;
+
+                card.innerHTML = `
+                    <div class="flex justify-between items-center">
+                        <span class="font-bold text-[10px] text-yellow-400">#${idx + 1}</span>
+                        <input type="text" class="bg-transparent border-b border-gray-700 text-white text-[11px] font-mono px-1 focus:outline-none focus:border-yellow-400 flex-1 mx-2" value="${r.memo}" data-id="${r.id}" placeholder="Memo...">
+                        <button class="delete-btn text-red-400 hover:text-red-200 px-1 font-bold text-[12px]" data-id="${r.id}">✕</button>
+                    </div>
+                    <div class="text-[9px] text-gray-400 flex justify-between items-center font-mono">
+                        <span>X:${r.x} Y:${r.y} W:${r.w} H:${r.h}</span>
+                        <div class="flex gap-1">
+                            <button class="dup-btn bg-gray-700 hover:bg-gray-600 text-white text-[8px] px-1 py-0.5 rounded" data-id="${r.id}">DUP</button>
+                            <button class="split-btn bg-purple-900 hover:bg-purple-700 text-white text-[8px] px-1 py-0.5 rounded border border-purple-600" data-id="${r.id}">SPLIT</button>
+                            <button class="png-btn bg-green-900 hover:bg-green-700 text-white text-[8px] px-1 py-0.5 rounded border border-green-600" data-id="${r.id}">PNG</button>
+                        </div>
+                    </div>
+                `;
+
+                // Select on Card Click
+                card.addEventListener('click', (e) => {
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+                    currentRect = { ...r };
+                    updateUIFromRect();
+                    updateRegionsList();
+                    draw();
+                });
+
+                // Memo Edit Handler
+                const memoInput = card.querySelector('input');
+                memoInput.addEventListener('change', (e) => {
+                    r.memo = e.target.value;
+                    if (currentRect.id === r.id) currentRect.memo = r.memo;
+                    draw();
+                });
+
+                // Delete Handler
+                card.querySelector('.delete-btn').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    regions = regions.filter(item => item.id !== r.id);
+                    if (currentRect.id === r.id) currentRect.id = null;
+                    updateRegionsList();
+                    draw();
+                });
+
+                // Duplicate Handler
+                card.querySelector('.dup-btn').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const duplicated = { ...r, id: Date.now(), x: r.x + 5, y: r.y + 5, memo: `${r.memo}_copy` };
+                    regions.push(duplicated);
+                    currentRect = { ...duplicated };
+                    updateUIFromRect();
+                    updateRegionsList();
+                    draw();
+                });
+
+                // Split Handler
+                card.querySelector('.split-btn').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    splitSpecificRegion(r.id);
+                });
+
+                // Individual PNG Export Handler
+                card.querySelector('.png-btn').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    downloadSinglePng(r);
+                });
+
+                regionsList.appendChild(card);
+            });
+        }
+
+        function downloadSinglePng(region) {
+            if (!isImageLoaded) return;
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = region.w;
+            tempCanvas.height = region.h;
+            const tempCtx = tempCanvas.getContext('2d');
+            
+            tempCtx.drawImage(
+                img,
+                region.x, region.y, region.w, region.h,
+                0, 0, region.w, region.h
+            );
+
+            const a = document.createElement('a');
+            a.download = `${region.memo || 'crop'}.png`;
+            a.href = tempCanvas.toDataURL('image/png');
+            a.click();
+            showNotification(`「${a.download}」を出力しました`);
+        }
+
+        copyBtn.addEventListener('click', () => {
+            const dataStr = JSON.stringify(regions.map(r => ({
+                x: r.x, y: r.y, width: r.w, height: r.h, memo: r.memo
+            })), null, 2);
+            
+            const textarea = document.createElement('textarea');
+            textarea.value = dataStr;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            
+            showNotification('JSONデータをクリップボードにコピーしました');
+        });
+
+        downloadJsonBtn.addEventListener('click', () => {
+            const dataStr = JSON.stringify(regions.map(r => ({
+                x: r.x, y: r.y, width: r.w, height: r.h, memo: r.memo
+            })), null, 2);
+            
+            const blob = new Blob([dataStr], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'crop_regions.json';
+            a.click();
+            showNotification('JSONファイルを保存しました');
+        });
+
+        exportZipBtn.addEventListener('click', async () => {
+            if (!isImageLoaded || regions.length === 0) {
+                showNotification('出力可能な領域がありません');
+                return;
+            }
+
+            if (typeof JSZip === 'undefined') {
+                showNotification('JSZipライブラリの読み込み中です...');
+                return;
+            }
+
+            const zip = new JSZip();
+            const folder = zip.folder('tiles');
+
+            regions.forEach((r, idx) => {
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = r.w;
+                tempCanvas.height = r.h;
+                const tempCtx = tempCanvas.getContext('2d');
+                
+                tempCtx.drawImage(img, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+                const dataUrl = tempCanvas.toDataURL('image/png');
+                const base64Data = dataUrl.replace(/^data:image\/png;base64,/, "");
+                
+                const filename = `${r.memo || `tile_${idx}`}.png`;
+                folder.file(filename, base64Data, { base64: true });
+            });
+
+            showNotification('ZIP化アーカイブを生成中...');
+            const content = await zip.generateAsync({ type: 'blob' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(content);
+            a.download = 'cropped_tiles.zip';
+            a.click();
+            showNotification('すべての画像をZIP保存しました');
+        });
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            zoomDisplay.innerText = `${Math.round(zoom * 100)}%`;
+            panDisplay.innerText = `${Math.round(panX)}, ${Math.round(panY)}`;
+
+            ctx.save();
+            ctx.translate(panX, panY);
+            ctx.scale(zoom, zoom);
+
+            // Draw loaded source image
+            if (isImageLoaded) {
+                ctx.drawImage(img, 0, 0);
+                // Image Boundary Border
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.lineWidth = 1 / zoom;
+                ctx.strokeRect(0, 0, img.width, img.height);
+            }
+
+            // Draw saved regions list
+            regions.forEach((r) => {
+                const isSelected = (currentRect.id === r.id);
+                ctx.strokeStyle = isSelected ? '#eab308' : '#06b6d4';
+                ctx.lineWidth = (isSelected ? 2 : 1) / zoom;
+                ctx.strokeRect(r.x, r.y, r.w, r.h);
+
+                ctx.fillStyle = isSelected ? 'rgba(234, 179, 8, 0.15)' : 'rgba(6, 182, 212, 0.1)';
+                ctx.fillRect(r.x, r.y, r.w, r.h);
+
+                // Render Memo Label Badge
+                if (r.memo) {
+                    ctx.font = `${Math.max(10, 11 / zoom)}px monospace`;
+                    const textMetrics = ctx.measureText(r.memo);
+                    const bgWidth = textMetrics.width + 6;
+                    const bgHeight = 14 / zoom;
+
+                    ctx.fillStyle = isSelected ? '#eab308' : '#0891b2';
+                    ctx.fillRect(r.x, r.y - bgHeight > 0 ? r.y - bgHeight : r.y, bgWidth, bgHeight);
+
+                    ctx.fillStyle = '#000000';
+                    ctx.fillText(r.memo, r.x + 3, (r.y - bgHeight > 0 ? r.y - bgHeight : r.y) + (11 / zoom));
+                }
+            });
+
+            // Draw Active Selection Box (If not already saved item)
+            if (currentRect.w > 0 && currentRect.h > 0 && currentRect.id === null) {
+                ctx.strokeStyle = '#3b82f6';
+                ctx.lineWidth = 2 / zoom;
+                ctx.setLineDash([4 / zoom, 4 / zoom]);
+                ctx.strokeRect(currentRect.x, currentRect.y, currentRect.w, currentRect.h);
+                ctx.setLineDash([]);
+
+                ctx.fillStyle = 'rgba(59, 130, 246, 0.15)';
+                ctx.fillRect(currentRect.x, currentRect.y, currentRect.w, currentRect.h);
+            }
+
+            ctx.restore();
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            const pos = screenToImage(e.clientX, e.clientY);
+
+            // Right click / Space + Drag -> Pan
+            if (e.button === 2 || e.button === 1 || spacePressed) {
+                isPanning = true;
+                startX = e.clientX - panX;
+                startY = e.clientY - panY;
+                canvasContainer.classList.add('panning');
+                return;
+            }
+
+            // Left Click -> Select or Draw Region
+            if (e.button === 0) {
+                // Check if clicking inside current rect to move
+                if (pos.x >= currentRect.x && pos.x <= currentRect.x + currentRect.w &&
+                    pos.y >= currentRect.y && pos.y <= currentRect.y + currentRect.h) {
+                    isMoving = true;
+                    moveOffsetX = pos.x - currentRect.x;
+                    moveOffsetY = pos.y - currentRect.y;
+                    canvasContainer.classList.add('moving');
+                    return;
+                }
+
+                // Check if clicking inside another existing region
+                const clickedRegion = regions.find(r => 
+                    pos.x >= r.x && pos.x <= r.x + r.w &&
+                    pos.y >= r.y && pos.y <= r.y + r.h
+                );
+
+                if (clickedRegion) {
+                    currentRect = { ...clickedRegion };
+                    updateUIFromRect();
+                    updateRegionsList();
+                    draw();
+                    return;
+                }
+
+                // Start drawing new rectangle
+                isDrawing = true;
+                currentRect.id = null;
+                startX = pos.x;
+                startY = pos.y;
+                currentRect.x = Math.round(pos.x);
+                currentRect.y = Math.round(pos.y);
+                currentRect.w = 0;
+                currentRect.h = 0;
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (isPanning) {
+                panX = e.clientX - startX;
+                panY = e.clientY - startY;
+                draw();
+                return;
+            }
+
+            const pos = screenToImage(e.clientX, e.clientY);
+
+            if (isMoving) {
+                let newRect = {
+                    ...currentRect,
+                    x: Math.round(pos.x - moveOffsetX),
+                    y: Math.round(pos.y - moveOffsetY)
+                };
+
+                if (e.shiftKey) {
+                    const snapped = applySnap(newRect, currentRect.id);
+                    newRect.x = snapped.x;
+                    newRect.y = snapped.y;
+                }
+
+                currentRect.x = newRect.x;
+                currentRect.y = newRect.y;
+
+                if (currentRect.id !== null) {
+                    const idx = regions.findIndex(r => r.id === currentRect.id);
+                    if (idx !== -1) regions[idx] = { ...currentRect };
+                    updateRegionsList();
+                }
+
+                updateUIFromRect();
+                draw();
+                return;
+            }
+
+            if (isDrawing) {
+                let w = Math.round(pos.x - startX);
+                let h = Math.round(pos.y - startY);
+
+                if (w < 0) {
+                    currentRect.x = Math.round(pos.x);
+                    currentRect.w = Math.abs(w);
+                } else {
+                    currentRect.x = Math.round(startX);
+                    currentRect.w = w;
+                }
+
+                if (h < 0) {
+                    currentRect.y = Math.round(pos.y);
+                    currentRect.h = Math.abs(h);
+                } else {
+                    currentRect.y = Math.round(startY);
+                    currentRect.h = h;
+                }
+
+                updateUIFromRect();
+                draw();
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            isPanning = false;
+            isMoving = false;
+            isDrawing = false;
+            canvasContainer.classList.remove('panning', 'moving');
+        });
+
+        // Double Click to Quickly Edit Memo
+        canvas.addEventListener('dblclick', (e) => {
+            const pos = screenToImage(e.clientX, e.clientY);
+            const target = regions.find(r => 
+                pos.x >= r.x && pos.x <= r.x + r.w &&
+                pos.y >= r.y && pos.y <= r.y + r.h
+            );
+
+            if (target) {
+                const newMemo = prompt('メモ/ラベルを編集してください:', target.memo || '');
+                if (newMemo !== null) {
+                    target.memo = newMemo;
+                    if (currentRect.id === target.id) {
+                        currentRect.memo = newMemo;
+                        updateUIFromRect();
+                    }
+                    updateRegionsList();
+                    draw();
+                }
+            }
+        });
+
+        // Context menu disable on canvas for pan
+        canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+            
+            const mouseX = e.clientX - canvas.getBoundingClientRect().left;
+            const mouseY = e.clientY - canvas.getBoundingClientRect().top;
+
+            const imageX = (mouseX - panX) / zoom;
+            const imageY = (mouseY - panY) / zoom;
+
+            zoom *= zoomFactor;
+            zoom = Math.min(Math.max(0.05, zoom), 50.0);
+
+            panX = mouseX - imageX * zoom;
+            panY = mouseY - imageY * zoom;
+
+            draw();
+        }, { passive: false });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') spacePressed = true;
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code) && document.activeElement.tagName !== 'INPUT') {
+                e.preventDefault();
+                const step = e.shiftKey ? 10 : 1;
+                
+                if (e.code === 'ArrowLeft') currentRect.x -= step;
+                if (e.code === 'ArrowRight') currentRect.x += step;
+                if (e.code === 'ArrowUp') currentRect.y -= step;
+                if (e.code === 'ArrowDown') currentRect.y += step;
+
+                if (currentRect.id !== null) {
+                    const idx = regions.findIndex(r => r.id === currentRect.id);
+                    if (idx !== -1) regions[idx] = { ...currentRect };
+                    updateRegionsList();
+                }
+
+                updateUIFromRect();
+                draw();
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') spacePressed = false;
+        });
+
+        // Initialize Canvas Size on Load
+        resizeCanvas();
+    </script>
+</body>
+</html>
